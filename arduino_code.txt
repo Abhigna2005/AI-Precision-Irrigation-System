@@ -1,0 +1,178 @@
+#include <DHT.h>
+#include <Wire.h>
+#include "RTClib.h"
+
+#define DHTPIN 2
+#define DHTTYPE DHT22
+#define SOIL_PIN A0
+#define RAIN_PIN A1
+
+DHT dht(DHTPIN, DHTTYPE);
+RTC_DS1307 rtc;
+
+int cropType = -1;
+int DAP = -1;
+float temperature = 0, humidity = 0;
+int soilMoisture = 0, rainfallADC = 0;
+
+const int rainThreshold = 300;
+const int waterLogRainThreshold = 300;
+const int waterLogSoilThreshold = 300;
+
+// Adjust these values based on your specific sensor readings
+const int SOIL_DRY_ADC = 850;  // ADC value in completely dry air
+const int SOIL_WET_ADC = 280;  // ADC value when fully submerged in water
+const int RAIN_DRY_ADC = 1023; // ADC value when sensor is dry
+const int RAIN_WET_ADC = 300;  // ADC value when sensor is very wet
+
+String inputBuffer = "";
+bool programRunning = true;
+
+const char* crops[] = {"Groundnut | ಶೆಂಗಾ", "Ragi | ರಾಗಿ", "Red Gram | ತುವರೆ"};
+
+String predict_irrigation(float Crop, float Temperature, float Humidity, float DAP, float Rainfall, float SoilMoisture) {
+  if (Crop <= 0.5) {
+    if (Temperature <= 30.5) return "No";
+    if (DAP <= 75.5) {
+      if (DAP <= 34.0) return "No";
+      if (Temperature <= 33.5 && DAP <= 66.5) return "Yes";
+      return "No";
+    }
+    return "No";
+  }
+  if (DAP <= 60.5) {
+    if (Rainfall <= 9.5) {
+      if (Humidity <= 49.5) return "Yes";
+      if (Humidity <= 70.5 && Temperature <= 27.5) return "Yes";
+      if (Humidity > 70.5 && Temperature <= 24.5) return "Yes";
+      if (Humidity > 70.5 && Temperature > 24.5) return "Yes";
+      return "No";
+    }
+    if (Crop <= 1.5 && Humidity <= 80.5 && DAP > 36.5) return "Yes";
+    if (Crop <= 1.5 && Humidity > 80.5) return "Yes";
+    return "No";
+  }
+  if (Rainfall <= 9.5) {
+    if (Crop <= 1.5 && DAP > 100.5) return "No";
+    if (Crop <= 1.5 && DAP > 90.5) return "Yes";
+    if (Crop > 1.5 && DAP <= 85.5) return "Yes";
+    return "No";
+  }
+  if (Rainfall <= 23.5 && Humidity <= 76.5 && SoilMoisture <= 327.0) return "Yes";
+  if (Rainfall <= 24.5) return "Yes";
+  return "No";
+}
+
+void printSeparator() {
+  Serial.println(F("------------------------------------------------"));
+}
+
+void setup() {
+  Serial.begin(9600);
+  dht.begin();
+  if (!rtc.begin()) {
+    Serial.println(F("Couldn't find RTC module DS1307"));
+    while (1);
+  }
+  if (!rtc.isrunning()) {
+    rtc.adjust(DateTime(F(_DATE), F(TIME_)));
+  }
+
+  Serial.println(F("\n=== Irrigation Prediction System ==="));
+  Serial.println(F("Please enter crop type (0 = Groundnut, 1 = Ragi, 2 = Red Gram)"));
+  Serial.println(F("ದಯವಿಟ್ಟು ಬೆಳೆ ಆಯ್ಕೆಮಾಡಿ (0 = ಶೆಂಗಾ, 1 = ರಾಗಿ, 2 = ತುವರೆ)"));
+  Serial.println(F("Type 'exit' to stop / ಟೈಪ್ ಮಾಡಿ 'exit' ನಿಲ್ಲಿಸಲು"));
+}
+
+void loop() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    Serial.write(c);
+    if (c == '\n') {
+      inputBuffer.trim();
+
+      if (inputBuffer.equalsIgnoreCase("exit")) {
+        Serial.println(F("\nProgram terminated."));
+        programRunning = false;
+      }
+
+      else if (cropType == -1) {
+        cropType = inputBuffer.toInt();
+        if (cropType >= 0 && cropType <= 2) {
+          Serial.println();
+          Serial.print(F("Selected Crop: ")); Serial.println(crops[cropType]);
+          Serial.println(F("Enter DAP (Days After Planting):"));
+          Serial.println(F("ನಾಟಿದ ನಂತರದ ದಿನಗಳು (DAP) ನಮೂದಿಸಿ:"));
+        } else {
+          Serial.println(F("\nInvalid crop type! Please enter 0, 1, or 2."));
+          Serial.println(F("ಅಮಾನ್ಯ ಬೆಳೆ ಆಯ್ಕೆ! ದಯವಿಟ್ಟು 0, 1 અથવા 2 ನಮೂದಿಸಿ."));
+          cropType = -1;
+        }
+      }
+
+      else if (DAP == -1) {
+        DAP = inputBuffer.toInt();
+        
+        Serial.print(F("\nDAP entered: ")); Serial.println(DAP);
+        Serial.print(F("ನಮೂದಿಸಿದ ದಿನಗಳು: ")); Serial.println(DAP);
+        Serial.print("\n");
+
+        temperature = dht.readTemperature();
+        humidity = dht.readHumidity();
+        soilMoisture = analogRead(SOIL_PIN);
+        rainfallADC = analogRead(RAIN_PIN);
+        DateTime now = rtc.now();
+
+        long soilMoisturePercent = map(soilMoisture, SOIL_DRY_ADC, SOIL_WET_ADC, 0, 100);
+        soilMoisturePercent = constrain(soilMoisturePercent, 0, 100);
+        
+        long rainfallPercent = map(rainfallADC, RAIN_DRY_ADC, RAIN_WET_ADC, 0, 100);
+        rainfallPercent = constrain(rainfallPercent, 0, 100);
+
+        printSeparator();
+        Serial.print(F("Time: ")); Serial.println(now.timestamp());
+        Serial.print(F("Crop: ")); Serial.print(cropType);
+        Serial.print(F(" | DAP: ")); Serial.print(DAP);
+        Serial.print(F(" | Temp: ")); Serial.print(temperature); Serial.println(F(" °C"));
+        Serial.print(F("Humidity: ")); Serial.print(humidity); Serial.println(F(" %"));
+        Serial.print(F("Soil Moisture: ")); Serial.print(soilMoisturePercent); Serial.print(F("%"));
+        Serial.print(F("Rainfall: ")); Serial.print(rainfallPercent); Serial.print(F("%"));
+
+        String result;
+        if (rainfallADC < rainThreshold) {
+          result = "No";
+          Serial.println(F("Rain detected! Overriding irrigation."));
+        } else {
+          result = predict_irrigation(cropType, temperature, humidity, DAP, rainfallADC, soilMoisture);
+        }
+
+        if (rainfallADC < waterLogRainThreshold && soilMoisture < waterLogSoilThreshold) {
+          Serial.println(F("ALERT: Waterlogging detected! Please open channel gates."));
+          Serial.println(F("ಎಚ್ಚರಿಕೆ: ನೀರಿನ ನಿಲುಗಡೆ ಕಂಡುಬಂದಿದೆ! ದಯವಿಟ್ಟು ಕಾಲುವೆಗಳ ಗೇಟ್‌ಗಳನ್ನು ತೆರೆಯಿರಿ."));
+          result = "No";
+        }
+
+        Serial.print(F("Irrigation Needed: ")); Serial.println(result);
+        Serial.print(F("ನೀರಾವರಿ ಅಗತ್ಯವಿದೆಯೆ?: "));
+        Serial.println(result.equals("Yes") ? F("ಹೌದು") : F("ಇಲ್ಲ"));
+
+        if (result == "Yes") {
+          Serial.print(F("LOG: Irrigation triggered at ")); Serial.println(now.timestamp());
+          Serial.println(F("ದಾಖಲೆ: ನೀರಾವರಿ ಆರಂಭಿಸಲಾಗಿದೆ."));
+        }
+
+        printSeparator();
+        Serial.println(F("\nEnter next crop (0, 1, 2) or type 'exit' to stop:"));
+        Serial.println(F("ಮುಂದಿನ ಬೆಳೆ (0, 1, 2) ನಮೂದಿಸಿ ಅಥವಾ ನಿಲ್ಲಿಸಲು 'exit' ಟೈಪ್ ಮಾಡಿ:"));
+
+        cropType = -1;
+        DAP = -1;
+      }
+      inputBuffer = "";
+    } else {
+      inputBuffer += c;
+    }
+  }
+  if (!programRunning) while (1);
+}
+
