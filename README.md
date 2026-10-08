@@ -54,4 +54,3 @@ Random Forest achieved the highest accuracy after hyperparameter tuning using Gr
 - `crops_conditions.xlsx` — Crop condition data
 - `arduino_code.ino` — Arduino implementation
 - `connections.pdf` — Circuit connections
-- `docs/` — Project documentation
